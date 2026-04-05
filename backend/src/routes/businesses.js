@@ -244,10 +244,22 @@ router.delete('/:businessId', async (req, res, next) => {
 
     await sequelize.transaction(async (t) => {
       if (tenantIds.length > 0) {
-        // Eliminar registros pivot user_tenants antes de borrar los tenants
+        // Desvincula registros que referencian a estos tenants (FK nullables)
         await sequelize.query(
           'DELETE FROM user_tenants WHERE tenant_id IN (:tenantIds)',
           { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.DELETE }
+        );
+        await sequelize.query(
+          'UPDATE superadmin_audit_log SET target_tenant = NULL WHERE target_tenant IN (:tenantIds)',
+          { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.UPDATE }
+        );
+        await sequelize.query(
+          'UPDATE users SET tenant_id = NULL WHERE tenant_id IN (:tenantIds)',
+          { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.UPDATE }
+        );
+        await sequelize.query(
+          'UPDATE audit_logs SET tenant_id = NULL WHERE tenant_id IN (:tenantIds)',
+          { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.UPDATE }
         );
         await Tenant.destroy({ where: { businessId }, transaction: t });
       }
