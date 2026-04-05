@@ -244,6 +244,11 @@ router.delete('/:businessId', async (req, res, next) => {
 
     await sequelize.transaction(async (t) => {
       if (tenantIds.length > 0) {
+        // Eliminar registros pivot user_tenants antes de borrar los tenants
+        await sequelize.query(
+          'DELETE FROM user_tenants WHERE tenant_id IN (:tenantIds)',
+          { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.DELETE }
+        );
         await Tenant.destroy({ where: { businessId }, transaction: t });
       }
       await business.destroy({ transaction: t });
