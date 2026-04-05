@@ -1,0 +1,63 @@
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
+const env = require('./config/environment');
+
+// Registrar modelos y asociaciones (requerido para Vercel serverless)
+require('./models');
+
+const authRoutes = require('./routes/auth');
+const tenantsRoutes = require('./routes/tenants');
+
+const app = express();
+
+// Confiar en proxy (Vercel)
+app.set('trust proxy', 1);
+
+// Seguridad
+app.use(helmet());
+
+// CORS — solo desde el frontend del Dashboard Maestro
+app.use(cors({
+  origin: env.NODE_ENV === 'production'
+    ? env.CORS_ORIGIN
+    : ['http://localhost:5173', 'http://localhost:5174', 'http://localhost:3000'],
+  credentials: true,
+}));
+
+// Rate limiting general
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  message: { success: false, message: 'Demasiadas solicitudes. Intentá más tarde.' },
+  standardHeaders: true,
+  legacyHeaders: false,
+}));
+
+// Body parsing
+app.use(express.json({ limit: '1mb' }));
+app.use(express.urlencoded({ extended: true }));
+
+// Rutas
+app.use('/api/auth', authRoutes);
+app.use('/api/tenants', tenantsRoutes);
+
+// Health check
+app.get('/api/health', (_req, res) => {
+  res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok' });
+});
+
+// 404
+app.use((_req, res) => {
+  res.status(404).json({ success: false, message: 'Ruta no encontrada' });
+});
+
+// Error handler global
+app.use((err, _req, res, _next) => {
+  const status = err.status || err.statusCode || 500;
+  const message = status < 500 ? err.message : 'Error interno del servidor';
+  res.status(status).json({ success: false, message });
+});
+
+module.exports = app;

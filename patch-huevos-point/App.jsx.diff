@@ -1,0 +1,19 @@
+--- a/client/src/App.jsx
++++ b/client/src/App.jsx
+
+// 1. Agregar import (con los otros imports de pages):
++import AutoLoginPage from './pages/AutoLoginPage';
+
+// 2. Agregar ruta ANTES de <Route path="/login" ...>:
++<Route path="/auto-login" element={<AutoLoginPage />} />
+
+// Ejemplo del bloque <Routes> resultante:
+//
+// <Routes>
+//   {/* Ruta de auto-login desde Dashboard Maestro */}
+//   <Route path="/auto-login" element={<AutoLoginPage />} />
+//
+//   {/* Rutas existentes */}
+//   <Route path="/login" element={<LoginPage />} />
+//   ...resto igual...
+// </Routes>
