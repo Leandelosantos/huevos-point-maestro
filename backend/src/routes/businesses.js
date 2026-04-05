@@ -156,4 +156,69 @@ router.get('/:businessId', async (req, res, next) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /api/businesses
+// Crea un nuevo negocio junto con su primera sucursal.
+// Body: { businessName, tenantName }
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/', async (req, res, next) => {
+  try {
+    const { businessName, tenantName } = req.body;
+
+    if (!businessName || !String(businessName).trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre del negocio es requerido' });
+    }
+    if (!tenantName || !String(tenantName).trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre de la primera sucursal es requerido' });
+    }
+
+    const trimmedBusinessName = String(businessName).trim();
+    const trimmedTenantName   = String(tenantName).trim();
+
+    // Slug automático desde el nombre del negocio
+    const slug = trimmedBusinessName
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar tildes
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    // Crear negocio y sucursal en una transacción
+    const result = await sequelize.transaction(async (t) => {
+      const business = await Business.create(
+        { name: trimmedBusinessName, slug },
+        { transaction: t }
+      );
+
+      const tenant = await Tenant.create(
+        {
+          name: trimmedTenantName,
+          businessId: business.id,
+          isActive: true,
+          subscriptionStatus: 'active',
+        },
+        { transaction: t }
+      );
+
+      return { business, tenant };
+    });
+
+    auditAccess(req, 'CREATE_BUSINESS', {
+      businessId: result.business.id,
+      businessName: trimmedBusinessName,
+      firstTenantName: trimmedTenantName,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        business: result.business,
+        tenant: result.tenant,
+      },
+      message: 'Negocio creado correctamente',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
