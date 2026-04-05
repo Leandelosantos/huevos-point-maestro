@@ -7,6 +7,7 @@ const env = require('./config/environment');
 // Registrar modelos y asociaciones (requerido para Vercel serverless)
 require('./models');
 
+const sequelize = require('./config/database');
 const authRoutes = require('./routes/auth');
 const tenantsRoutes = require('./routes/tenants');
 
@@ -43,9 +44,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/auth', authRoutes);
 app.use('/tenants', tenantsRoutes);
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok' });
+// Health check con diagnóstico de DB
+app.get('/health', async (_req, res) => {
+  try {
+    await sequelize.authenticate();
+    res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok', db: 'connected' });
+  } catch (err) {
+    res.status(500).json({ success: false, status: 'db_error', error: err.message });
+  }
 });
 
 // 404
@@ -56,8 +62,8 @@ app.use((_req, res) => {
 // Error handler global
 app.use((err, _req, res, _next) => {
   const status = err.status || err.statusCode || 500;
-  const message = status < 500 ? err.message : 'Error interno del servidor';
-  res.status(status).json({ success: false, message });
+  // En producción exponer message temporalmente para diagnóstico
+  res.status(status).json({ success: false, message: err.message || 'Error interno del servidor' });
 });
 
 module.exports = app;
