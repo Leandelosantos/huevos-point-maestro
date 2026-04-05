@@ -7,7 +7,6 @@ const env = require('./config/environment');
 // Registrar modelos y asociaciones (requerido para Vercel serverless)
 require('./models');
 
-const sequelize = require('./config/database');
 const authRoutes = require('./routes/auth');
 const tenantsRoutes = require('./routes/tenants');
 
@@ -44,18 +43,14 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/auth', authRoutes);
 app.use('/tenants', tenantsRoutes);
 
-// Health check con diagnóstico de DB
+// Health check
 app.get('/health', async (_req, res) => {
-  const db = require('./config/database');
-  const initError = db?._initError;
-  if (initError) {
-    return res.status(500).json({ success: false, status: 'db_init_error', error: initError });
-  }
+  const sequelize = require('./config/database');
   try {
-    await db.authenticate();
+    await sequelize.authenticate();
     res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok', db: 'connected' });
   } catch (err) {
-    res.status(500).json({ success: false, status: 'db_auth_error', error: err.message });
+    res.status(500).json({ success: false, status: 'db_error', error: err.message });
   }
 });
 
@@ -67,8 +62,8 @@ app.use((_req, res) => {
 // Error handler global
 app.use((err, _req, res, _next) => {
   const status = err.status || err.statusCode || 500;
-  // En producción exponer message temporalmente para diagnóstico
-  res.status(status).json({ success: false, message: err.message || 'Error interno del servidor' });
+  const message = status < 500 ? err.message : 'Error interno del servidor';
+  res.status(status).json({ success: false, message });
 });
 
 module.exports = app;
