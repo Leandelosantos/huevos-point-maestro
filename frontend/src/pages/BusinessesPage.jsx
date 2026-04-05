@@ -11,6 +11,12 @@ import {
   Skeleton,
   Button,
   Alert,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  CircularProgress,
 } from '@mui/material';
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded';
@@ -18,9 +24,13 @@ import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import AccountBalanceWalletRoundedIcon from '@mui/icons-material/AccountBalanceWalletRounded';
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
+import AddRoundedIcon from '@mui/icons-material/AddRounded';
 import api from '../services/api';
 import { formatCurrency } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
+
+const EMPTY_FORM = { businessName: '', tenantName: '' };
+const EMPTY_ERRORS = { businessName: '', tenantName: '' };
 
 export default function BusinessesPage() {
   const navigate = useNavigate();
@@ -28,6 +38,13 @@ export default function BusinessesPage() {
   const [businesses, setBusinesses] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+
+  // Modal de nuevo negocio
+  const [modalOpen, setModalOpen] = useState(false);
+  const [form, setForm] = useState(EMPTY_FORM);
+  const [formErrors, setFormErrors] = useState(EMPTY_ERRORS);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
 
   const fetchBusinesses = useCallback(async () => {
     try {
@@ -46,6 +63,49 @@ export default function BusinessesPage() {
     fetchBusinesses();
   }, [fetchBusinesses]);
 
+  const handleOpenModal = () => {
+    setForm(EMPTY_FORM);
+    setFormErrors(EMPTY_ERRORS);
+    setSaveError('');
+    setModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    if (saving) return;
+    setModalOpen(false);
+  };
+
+  const handleChange = (field) => (e) => {
+    setForm((prev) => ({ ...prev, [field]: e.target.value }));
+    setFormErrors((prev) => ({ ...prev, [field]: '' }));
+  };
+
+  const validate = () => {
+    const errors = { businessName: '', tenantName: '' };
+    if (!form.businessName.trim()) errors.businessName = 'El nombre del negocio es requerido';
+    if (!form.tenantName.trim()) errors.tenantName = 'El nombre de la sucursal es requerido';
+    setFormErrors(errors);
+    return !errors.businessName && !errors.tenantName;
+  };
+
+  const handleSubmit = async () => {
+    if (!validate()) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      await api.post('/businesses', {
+        businessName: form.businessName.trim(),
+        tenantName: form.tenantName.trim(),
+      });
+      setModalOpen(false);
+      fetchBusinesses();
+    } catch (err) {
+      setSaveError(err?.response?.data?.message || 'Error al crear el negocio');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
     <Box>
       {/* Header */}
@@ -58,16 +118,25 @@ export default function BusinessesPage() {
             Bienvenido, {user?.fullName || user?.username} · Seleccioná un negocio para ver sus sucursales
           </Typography>
         </Box>
-        <Button
-          startIcon={<RefreshRoundedIcon />}
-          onClick={fetchBusinesses}
-          disabled={loading}
-          variant="outlined"
-          size="small"
-          sx={{ mt: { xs: 0, sm: 1 } }}
-        >
-          Actualizar
-        </Button>
+        <Box sx={{ display: 'flex', gap: 1.5, mt: { xs: 0, sm: 1 } }}>
+          <Button
+            startIcon={<RefreshRoundedIcon />}
+            onClick={fetchBusinesses}
+            disabled={loading}
+            variant="outlined"
+            size="small"
+          >
+            Actualizar
+          </Button>
+          <Button
+            startIcon={<AddRoundedIcon />}
+            onClick={handleOpenModal}
+            variant="contained"
+            size="small"
+          >
+            Nuevo Negocio
+          </Button>
+        </Box>
       </Box>
 
       {error && (
@@ -249,6 +318,70 @@ export default function BusinessesPage() {
             </Grid>
           ))}
       </Grid>
+
+      {/* Modal — Nuevo Negocio */}
+      <Dialog
+        open={modalOpen}
+        onClose={handleCloseModal}
+        fullWidth
+        maxWidth="sm"
+        PaperProps={{ sx: { borderRadius: 3 } }}
+      >
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
+          Nuevo Negocio
+        </DialogTitle>
+
+        <DialogContent sx={{ pt: 1 }}>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
+            Completá los datos para crear el negocio y su primera sucursal.
+          </Typography>
+
+          {saveError && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {saveError}
+            </Alert>
+          )}
+
+          <TextField
+            label="Nombre del negocio"
+            placeholder="Ej: Huevos Point"
+            value={form.businessName}
+            onChange={handleChange('businessName')}
+            error={Boolean(formErrors.businessName)}
+            helperText={formErrors.businessName}
+            fullWidth
+            autoFocus
+            disabled={saving}
+            sx={{ mb: 2.5 }}
+          />
+
+          <TextField
+            label="Nombre de la primera sucursal"
+            placeholder="Ej: Sucursal Centro"
+            value={form.tenantName}
+            onChange={handleChange('tenantName')}
+            error={Boolean(formErrors.tenantName)}
+            helperText={formErrors.tenantName}
+            fullWidth
+            disabled={saving}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+          />
+        </DialogContent>
+
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={handleCloseModal} disabled={saving} variant="outlined" color="inherit">
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleSubmit}
+            disabled={saving}
+            variant="contained"
+            startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <AddRoundedIcon />}
+          >
+            {saving ? 'Creando...' : 'Crear Negocio'}
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Box>
   );
 }
