@@ -40,11 +40,11 @@ app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Rutas
-app.use('/api/auth', authRoutes);
-app.use('/api/tenants', tenantsRoutes);
+app.use('/auth', authRoutes);
+app.use('/tenants', tenantsRoutes);
 
 // Health check
-app.get('/api/health', (_req, res) => {
+app.get('/health', (_req, res) => {
   res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok' });
 });
 
