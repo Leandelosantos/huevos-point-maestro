@@ -1,8 +1,13 @@
+const Business = require('./Business');
 const Tenant = require('./Tenant');
 const User = require('./User');
 const Sale = require('./Sale');
 const Expense = require('./Expense');
 const SuperadminAuditLog = require('./SuperadminAuditLog');
+
+// Business ↔ Tenant
+Business.hasMany(Tenant, { foreignKey: 'businessId', as: 'tenants' });
+Tenant.belongsTo(Business, { foreignKey: 'businessId', as: 'business' });
 
 // Associations
 Tenant.hasMany(Sale, { foreignKey: 'tenantId', as: 'sales' });
@@ -27,4 +32,4 @@ User.belongsToMany(Tenant, {
 
 SuperadminAuditLog.belongsTo(Tenant, { foreignKey: 'targetTenant', as: 'tenant' });
 
-module.exports = { Tenant, User, Sale, Expense, SuperadminAuditLog };
+module.exports = { Business, Tenant, User, Sale, Expense, SuperadminAuditLog };

@@ -1,0 +1,159 @@
+const { Router } = require('express');
+const { Op } = require('sequelize');
+const sequelize = require('../config/database');
+const { authMiddleware } = require('../middlewares/auth');
+const { Business, Tenant, Sale, Expense, SuperadminAuditLog } = require('../models');
+
+const router = Router();
+
+router.use(authMiddleware);
+
+async function auditAccess(req, action, details = {}) {
+  await SuperadminAuditLog.create({
+    adminUserId: req.user.id,
+    action,
+    targetTenant: null,
+    details: { ...details, source: 'dashboard-maestro', ip: req.ip },
+    ipAddress: req.ip,
+  }).catch(() => {});
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /api/businesses
+// Lista todos los negocios con stats agregadas de sus sucursales.
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/', async (req, res, next) => {
+  try {
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+
+    const businesses = await Business.findAll({ order: [['name', 'ASC']] });
+
+    const results = await Promise.all(
+      businesses.map(async (business) => {
+        const tenants = await Tenant.findAll({ where: { businessId: business.id } });
+        const tenantIds = tenants.map((t) => t.id);
+
+        const [salesTotal, expensesTotal] = tenantIds.length
+          ? await Promise.all([
+              Sale.sum('totalAmount', {
+                where: { tenantId: { [Op.in]: tenantIds }, saleDate: { [Op.gte]: dateThreshold } },
+              }),
+              Expense.sum('amount', {
+                where: { tenantId: { [Op.in]: tenantIds }, expenseDate: { [Op.gte]: dateThreshold } },
+              }),
+            ])
+          : [0, 0];
+
+        const sales30d = parseFloat(salesTotal) || 0;
+        const expenses30d = parseFloat(expensesTotal) || 0;
+
+        return {
+          id: business.id,
+          name: business.name,
+          slug: business.slug,
+          isActive: business.isActive,
+          tenantCount: tenants.length,
+          activeTenantCount: tenants.filter((t) => t.isActive).length,
+          salesLast30Days: sales30d,
+          expensesLast30Days: expenses30d,
+          netLast30Days: sales30d - expenses30d,
+          createdAt: business.createdAt,
+        };
+      })
+    );
+
+    auditAccess(req, 'LIST_BUSINESSES');
+
+    res.json({ success: true, data: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// GET /api/businesses/:businessId
+// Detalle de un negocio con lista de sus tenants y stats 30d por sucursal.
+// ──────────────────────────────────────────────────────────────────────────────
+router.get('/:businessId', async (req, res, next) => {
+  try {
+    const businessId = parseInt(req.params.businessId, 10);
+    if (!businessId || businessId <= 0) {
+      return res.status(400).json({ success: false, message: 'ID de negocio inválido' });
+    }
+
+    const business = await Business.findByPk(businessId);
+    if (!business) {
+      return res.status(404).json({ success: false, message: 'Negocio no encontrado' });
+    }
+
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+
+    const tenants = await Tenant.findAll({
+      where: { businessId },
+      order: [['name', 'ASC']],
+    });
+
+    const tenantsWithStats = await Promise.all(
+      tenants.map(async (tenant) => {
+        const [userCount, salesLast30Days, expensesLast30Days] = await Promise.all([
+          sequelize.query(
+            'SELECT COUNT(*) as count FROM user_tenants WHERE tenant_id = :tenantId',
+            { replacements: { tenantId: tenant.id }, type: sequelize.QueryTypes.SELECT }
+          ).then((rows) => parseInt(rows[0]?.count || 0, 10)),
+
+          Sale.sum('totalAmount', {
+            where: { tenantId: tenant.id, saleDate: { [Op.gte]: dateThreshold } },
+          }),
+
+          Expense.sum('amount', {
+            where: { tenantId: tenant.id, expenseDate: { [Op.gte]: dateThreshold } },
+          }),
+        ]);
+
+        const sales30d = parseFloat(salesLast30Days) || 0;
+        const expenses30d = parseFloat(expensesLast30Days) || 0;
+
+        return {
+          id: tenant.id,
+          name: tenant.name,
+          slug: tenant.slug,
+          isActive: tenant.isActive,
+          subscriptionStatus: tenant.subscriptionStatus,
+          userCount,
+          salesLast30Days: sales30d,
+          expensesLast30Days: expenses30d,
+          netLast30Days: sales30d - expenses30d,
+          createdAt: tenant.createdAt,
+        };
+      })
+    );
+
+    // Stats globales del negocio
+    const totalStats = {
+      tenantCount: tenants.length,
+      activeTenantCount: tenants.filter((t) => t.isActive).length,
+      salesLast30Days: tenantsWithStats.reduce((acc, t) => acc + t.salesLast30Days, 0),
+      expensesLast30Days: tenantsWithStats.reduce((acc, t) => acc + t.expensesLast30Days, 0),
+      netLast30Days: tenantsWithStats.reduce((acc, t) => acc + t.netLast30Days, 0),
+    };
+
+    auditAccess(req, 'VIEW_BUSINESS_DETAIL', { businessId, businessName: business.name });
+
+    res.json({
+      success: true,
+      data: {
+        business,
+        tenants: tenantsWithStats,
+        totalStats,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+module.exports = router;

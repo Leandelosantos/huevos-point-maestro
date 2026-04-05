@@ -25,6 +25,11 @@ const Tenant = sequelize.define('Tenant', {
     type: DataTypes.TEXT,
     allowNull: true,
   },
+  businessId: {
+    type: DataTypes.INTEGER,
+    allowNull: true,
+    field: 'business_id',
+  },
 }, {
   tableName: 'tenants',
   timestamps: true,

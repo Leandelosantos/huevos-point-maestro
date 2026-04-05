@@ -8,6 +8,7 @@ const env = require('./config/environment');
 require('./models');
 
 const authRoutes = require('./routes/auth');
+const businessesRoutes = require('./routes/businesses');
 const tenantsRoutes = require('./routes/tenants');
 
 const app = express();
@@ -41,6 +42,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Rutas
 app.use('/auth', authRoutes);
+app.use('/businesses', businessesRoutes);
 app.use('/tenants', tenantsRoutes);
 
 // Health check
