@@ -46,12 +46,19 @@ app.use('/tenants', tenantsRoutes);
 
 // Health check con diagnóstico de DB
 app.get('/health', async (_req, res) => {
-  try {
-    await sequelize.authenticate();
-    res.json({ success: true, service: 'dashboard-maestro-api', status: 'ok', db: 'connected' });
-  } catch (err) {
-    res.status(500).json({ success: false, status: 'db_error', error: err.message });
-  }
+  const db = require('./config/database');
+  res.json({
+    service: 'dashboard-maestro-api',
+    dbType: typeof db,
+    dbConstructor: db?.constructor?.name,
+    dbKeys: db ? Object.keys(db).slice(0, 10) : null,
+    hasAuthenticate: typeof db?.authenticate,
+    env: {
+      NODE_ENV: process.env.NODE_ENV,
+      DB_HOST: process.env.DB_HOST ? process.env.DB_HOST.substring(0, 20) + '...' : 'NOT SET',
+      JWT_SECRET: process.env.JWT_SECRET ? 'SET' : 'NOT SET',
+    },
+  });
 });
 
 // 404
