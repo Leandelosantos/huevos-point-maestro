@@ -136,6 +136,7 @@ export default function TenantDetailPage() {
 
   const tenant = detail?.tenant;
   const isActive = tenant?.isActive;
+  const businessId = tenant?.businessId;
 
   // Usar métricas del día del polling si están disponibles, sino las del detalle
   const salesToday = todayMetrics?.totalVentasHoy ?? detail?.totalSalesToday ?? 0;
@@ -186,10 +187,10 @@ export default function TenantDetailPage() {
       <Box sx={{ mb: 4 }}>
         <Button
           startIcon={<ArrowBackRoundedIcon />}
-          onClick={() => navigate('/')}
+          onClick={() => businessId ? navigate(`/businesses/${businessId}`) : navigate('/')}
           sx={{ color: 'text.secondary', mb: 1.5, textTransform: 'none', fontWeight: 500 }}
         >
-          Volver al panel
+          {businessId ? 'Volver al negocio' : 'Volver al panel'}
         </Button>
 
         <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, justifyContent: 'space-between', alignItems: { xs: 'flex-start', sm: 'center' }, gap: 2 }}>

@@ -8,7 +8,8 @@ import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
 
 // Lazy load de páginas protegidas
-const DashboardPage = lazy(() => import('./pages/DashboardPage'));
+const BusinessesPage = lazy(() => import('./pages/BusinessesPage'));
+const BusinessDetailPage = lazy(() => import('./pages/BusinessDetailPage'));
 const TenantDetailPage = lazy(() => import('./pages/TenantDetailPage'));
 
 const LoadingFallback = () => (
@@ -39,7 +40,15 @@ export default function App() {
                 path="/"
                 element={
                   <Suspense fallback={<LoadingFallback />}>
-                    <DashboardPage />
+                    <BusinessesPage />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/businesses/:businessId"
+                element={
+                  <Suspense fallback={<LoadingFallback />}>
+                    <BusinessDetailPage />
                   </Suspense>
                 }
               />
