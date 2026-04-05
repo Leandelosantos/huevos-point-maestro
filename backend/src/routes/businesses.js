@@ -157,6 +157,107 @@ router.get('/:businessId', async (req, res, next) => {
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
+// PUT /api/businesses/:businessId
+// Edita el nombre del negocio y los nombres de sus sucursales.
+// Body: { businessName, tenants: [{ id, name }] }
+// ──────────────────────────────────────────────────────────────────────────────
+router.put('/:businessId', async (req, res, next) => {
+  try {
+    const businessId = parseInt(req.params.businessId, 10);
+    if (!businessId || businessId <= 0) {
+      return res.status(400).json({ success: false, message: 'ID de negocio inválido' });
+    }
+
+    const { businessName, tenants } = req.body;
+
+    if (!businessName || !String(businessName).trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre del negocio es requerido' });
+    }
+
+    const business = await Business.findByPk(businessId);
+    if (!business) {
+      return res.status(404).json({ success: false, message: 'Negocio no encontrado' });
+    }
+
+    const trimmedName = String(businessName).trim();
+    const slug = trimmedName
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, '');
+
+    await sequelize.transaction(async (t) => {
+      await business.update({ name: trimmedName, slug }, { transaction: t });
+
+      if (Array.isArray(tenants)) {
+        for (const item of tenants) {
+          const tenantId = parseInt(item.id, 10);
+          if (!tenantId || !item.name?.trim()) continue;
+          await Tenant.update(
+            { name: item.name.trim() },
+            { where: { id: tenantId, businessId }, transaction: t }
+          );
+        }
+      }
+    });
+
+    auditAccess(req, 'EDIT_BUSINESS', { businessId, businessName: trimmedName });
+
+    res.json({ success: true, message: 'Negocio actualizado correctamente' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DELETE /api/businesses/:businessId
+// Elimina el negocio y sus sucursales. Bloquea si hay ventas o egresos.
+// ──────────────────────────────────────────────────────────────────────────────
+router.delete('/:businessId', async (req, res, next) => {
+  try {
+    const businessId = parseInt(req.params.businessId, 10);
+    if (!businessId || businessId <= 0) {
+      return res.status(400).json({ success: false, message: 'ID de negocio inválido' });
+    }
+
+    const business = await Business.findByPk(businessId);
+    if (!business) {
+      return res.status(404).json({ success: false, message: 'Negocio no encontrado' });
+    }
+
+    const tenants = await Tenant.findAll({ where: { businessId } });
+    const tenantIds = tenants.map((t) => t.id);
+
+    if (tenantIds.length > 0) {
+      const [salesCount, expensesCount] = await Promise.all([
+        Sale.count({ where: { tenantId: { [Op.in]: tenantIds } } }),
+        Expense.count({ where: { tenantId: { [Op.in]: tenantIds } } }),
+      ]);
+
+      if (salesCount > 0 || expensesCount > 0) {
+        return res.status(409).json({
+          success: false,
+          message: `No se puede eliminar: el negocio tiene ${salesCount} venta(s) y ${expensesCount} egreso(s) registrados.`,
+        });
+      }
+    }
+
+    await sequelize.transaction(async (t) => {
+      if (tenantIds.length > 0) {
+        await Tenant.destroy({ where: { businessId }, transaction: t });
+      }
+      await business.destroy({ transaction: t });
+    });
+
+    auditAccess(req, 'DELETE_BUSINESS', { businessId, businessName: business.name });
+
+    res.json({ success: true, message: 'Negocio eliminado correctamente' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
 // POST /api/businesses
 // Crea un nuevo negocio junto con su primera sucursal.
 // Body: { businessName, tenantName }

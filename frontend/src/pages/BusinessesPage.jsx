@@ -5,7 +5,6 @@ import {
   Typography,
   Card,
   CardContent,
-  CardActionArea,
   Grid,
   Chip,
   Skeleton,
@@ -17,6 +16,9 @@ import {
   DialogActions,
   TextField,
   CircularProgress,
+  IconButton,
+  Tooltip,
+  Divider,
 } from '@mui/material';
 import StorefrontRoundedIcon from '@mui/icons-material/StorefrontRounded';
 import BusinessRoundedIcon from '@mui/icons-material/BusinessRounded';
@@ -25,6 +27,8 @@ import AccountBalanceWalletRoundedIcon from '@mui/icons-material/AccountBalanceW
 import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded';
 import ChevronRightRoundedIcon from '@mui/icons-material/ChevronRightRounded';
 import AddRoundedIcon from '@mui/icons-material/AddRounded';
+import EditRoundedIcon from '@mui/icons-material/EditRounded';
+import DeleteRoundedIcon from '@mui/icons-material/DeleteRounded';
 import api from '../services/api';
 import { formatCurrency } from '../utils/formatters';
 import { useAuth } from '../context/AuthContext';
@@ -39,13 +43,29 @@ export default function BusinessesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
 
-  // Modal de nuevo negocio
-  const [modalOpen, setModalOpen] = useState(false);
+  // ── Modal Nuevo Negocio ──────────────────────────────────────────────────────
+  const [createOpen, setCreateOpen] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
   const [formErrors, setFormErrors] = useState(EMPTY_ERRORS);
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState('');
 
+  // ── Modal Editar Negocio ─────────────────────────────────────────────────────
+  const [editOpen, setEditOpen] = useState(false);
+  const [editBusinessId, setEditBusinessId] = useState(null);
+  const [editBusinessName, setEditBusinessName] = useState('');
+  const [editTenants, setEditTenants] = useState([]); // [{ id, name }]
+  const [editLoading, setEditLoading] = useState(false);
+  const [editSaving, setEditSaving] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  // ── Modal Confirmar Eliminar ─────────────────────────────────────────────────
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusiness, setDeleteBusiness] = useState(null); // { id, name }
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  // ── Fetch ────────────────────────────────────────────────────────────────────
   const fetchBusinesses = useCallback(async () => {
     try {
       setLoading(true);
@@ -59,28 +79,24 @@ export default function BusinessesPage() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchBusinesses();
-  }, [fetchBusinesses]);
+  useEffect(() => { fetchBusinesses(); }, [fetchBusinesses]);
 
-  const handleOpenModal = () => {
+  // ── Crear negocio ────────────────────────────────────────────────────────────
+  const handleOpenCreate = () => {
     setForm(EMPTY_FORM);
     setFormErrors(EMPTY_ERRORS);
     setSaveError('');
-    setModalOpen(true);
+    setCreateOpen(true);
   };
 
-  const handleCloseModal = () => {
-    if (saving) return;
-    setModalOpen(false);
-  };
+  const handleCloseCreate = () => { if (!saving) setCreateOpen(false); };
 
-  const handleChange = (field) => (e) => {
+  const handleChangeCreate = (field) => (e) => {
     setForm((prev) => ({ ...prev, [field]: e.target.value }));
     setFormErrors((prev) => ({ ...prev, [field]: '' }));
   };
 
-  const validate = () => {
+  const validateCreate = () => {
     const errors = { businessName: '', tenantName: '' };
     if (!form.businessName.trim()) errors.businessName = 'El nombre del negocio es requerido';
     if (!form.tenantName.trim()) errors.tenantName = 'El nombre de la sucursal es requerido';
@@ -88,8 +104,8 @@ export default function BusinessesPage() {
     return !errors.businessName && !errors.tenantName;
   };
 
-  const handleSubmit = async () => {
-    if (!validate()) return;
+  const handleSubmitCreate = async () => {
+    if (!validateCreate()) return;
     setSaving(true);
     setSaveError('');
     try {
@@ -97,7 +113,7 @@ export default function BusinessesPage() {
         businessName: form.businessName.trim(),
         tenantName: form.tenantName.trim(),
       });
-      setModalOpen(false);
+      setCreateOpen(false);
       fetchBusinesses();
     } catch (err) {
       setSaveError(err?.response?.data?.message || 'Error al crear el negocio');
@@ -106,6 +122,77 @@ export default function BusinessesPage() {
     }
   };
 
+  // ── Editar negocio ───────────────────────────────────────────────────────────
+  const handleOpenEdit = async (e, business) => {
+    e.stopPropagation();
+    setEditBusinessId(business.id);
+    setEditBusinessName(business.name);
+    setEditTenants([]);
+    setEditError('');
+    setEditOpen(true);
+    setEditLoading(true);
+    try {
+      const { data } = await api.get(`/businesses/${business.id}`);
+      setEditTenants(data.data.tenants.map((t) => ({ id: t.id, name: t.name })));
+    } catch {
+      setEditError('Error al cargar los datos del negocio');
+    } finally {
+      setEditLoading(false);
+    }
+  };
+
+  const handleCloseEdit = () => { if (!editSaving) setEditOpen(false); };
+
+  const handleChangeTenantName = (idx, value) => {
+    setEditTenants((prev) => prev.map((t, i) => (i === idx ? { ...t, name: value } : t)));
+  };
+
+  const handleSubmitEdit = async () => {
+    if (!editBusinessName.trim()) {
+      setEditError('El nombre del negocio es requerido');
+      return;
+    }
+    setEditSaving(true);
+    setEditError('');
+    try {
+      await api.put(`/businesses/${editBusinessId}`, {
+        businessName: editBusinessName.trim(),
+        tenants: editTenants,
+      });
+      setEditOpen(false);
+      fetchBusinesses();
+    } catch (err) {
+      setEditError(err?.response?.data?.message || 'Error al guardar los cambios');
+    } finally {
+      setEditSaving(false);
+    }
+  };
+
+  // ── Eliminar negocio ─────────────────────────────────────────────────────────
+  const handleOpenDelete = (e, business) => {
+    e.stopPropagation();
+    setDeleteBusiness(business);
+    setDeleteError('');
+    setDeleteOpen(true);
+  };
+
+  const handleCloseDelete = () => { if (!deleting) setDeleteOpen(false); };
+
+  const handleConfirmDelete = async () => {
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await api.delete(`/businesses/${deleteBusiness.id}`);
+      setDeleteOpen(false);
+      fetchBusinesses();
+    } catch (err) {
+      setDeleteError(err?.response?.data?.message || 'Error al eliminar el negocio');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // ── Render ───────────────────────────────────────────────────────────────────
   return (
     <Box>
       {/* Header */}
@@ -130,7 +217,7 @@ export default function BusinessesPage() {
           </Button>
           <Button
             startIcon={<AddRoundedIcon />}
-            onClick={handleOpenModal}
+            onClick={handleOpenCreate}
             variant="contained"
             size="small"
           >
@@ -139,18 +226,14 @@ export default function BusinessesPage() {
         </Box>
       </Box>
 
-      {error && (
-        <Alert severity="error" sx={{ mb: 3 }}>
-          {error}
-        </Alert>
-      )}
+      {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
       {/* Cards de negocios */}
       <Grid container spacing={3}>
         {loading
           ? Array.from({ length: 2 }).map((_, i) => (
               <Grid item xs={12} md={6} key={i}>
-                <Skeleton variant="rounded" height={220} />
+                <Skeleton variant="rounded" height={240} />
               </Grid>
             ))
           : businesses.length === 0
@@ -168,6 +251,8 @@ export default function BusinessesPage() {
               <Card
                 sx={{
                   height: '100%',
+                  display: 'flex',
+                  flexDirection: 'column',
                   border: '1px solid',
                   borderColor: business.isActive ? 'rgba(21,101,192,0.15)' : 'rgba(0,0,0,0.08)',
                   transition: 'box-shadow 0.2s, transform 0.15s',
@@ -177,176 +262,159 @@ export default function BusinessesPage() {
                   },
                 }}
               >
-                <CardActionArea
+                {/* Área clickeable principal */}
+                <CardContent
                   onClick={() => navigate(`/businesses/${business.id}`)}
-                  sx={{ height: '100%', alignItems: 'flex-start' }}
+                  sx={{ p: 3, flex: 1, cursor: 'pointer' }}
                 >
-                  <CardContent sx={{ p: 3, height: '100%' }}>
-                    {/* Header de la card */}
-                    <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2.5 }}>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
-                        <Box
-                          sx={{
-                            width: 48,
-                            height: 48,
-                            borderRadius: '14px',
-                            background: 'linear-gradient(135deg, #0D47A1 0%, #1565C0 100%)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            color: '#FFF',
-                            flexShrink: 0,
-                          }}
-                        >
-                          <StorefrontRoundedIcon />
-                        </Box>
-                        <Box>
-                          <Typography variant="h6" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
-                            {business.name}
-                          </Typography>
-                          {business.slug && (
-                            <Typography variant="caption" color="text.secondary">
-                              {business.slug}
-                            </Typography>
-                          )}
-                        </Box>
+                  {/* Header */}
+                  <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', mb: 2.5 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+                      <Box
+                        sx={{
+                          width: 48,
+                          height: 48,
+                          borderRadius: '14px',
+                          background: 'linear-gradient(135deg, #0D47A1 0%, #1565C0 100%)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#FFF',
+                          flexShrink: 0,
+                        }}
+                      >
+                        <StorefrontRoundedIcon />
                       </Box>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
-                        <Chip
-                          label={business.isActive ? 'Activo' : 'Inactivo'}
-                          size="small"
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: '0.72rem',
-                            backgroundColor: business.isActive
-                              ? 'rgba(45, 106, 79, 0.1)'
-                              : 'rgba(198, 40, 40, 0.1)',
-                            color: business.isActive ? '#2D6A4F' : '#C62828',
-                          }}
-                        />
-                        <ChevronRightRoundedIcon sx={{ color: 'text.disabled', fontSize: 20 }} />
+                      <Box>
+                        <Typography variant="h6" sx={{ fontWeight: 800, lineHeight: 1.2 }}>
+                          {business.name}
+                        </Typography>
+                        {business.slug && (
+                          <Typography variant="caption" color="text.secondary">
+                            {business.slug}
+                          </Typography>
+                        )}
                       </Box>
                     </Box>
+                    <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
+                      <Chip
+                        label={business.isActive ? 'Activo' : 'Inactivo'}
+                        size="small"
+                        sx={{
+                          fontWeight: 700,
+                          fontSize: '0.72rem',
+                          backgroundColor: business.isActive
+                            ? 'rgba(45, 106, 79, 0.1)'
+                            : 'rgba(198, 40, 40, 0.1)',
+                          color: business.isActive ? '#2D6A4F' : '#C62828',
+                        }}
+                      />
+                      <ChevronRightRoundedIcon sx={{ color: 'text.disabled', fontSize: 20 }} />
+                    </Box>
+                  </Box>
 
-                    {/* Stats */}
-                    <Grid container spacing={1.5}>
-                      <Grid item xs={6}>
-                        <Box
-                          sx={{
-                            p: 1.5,
-                            borderRadius: 2,
-                            bgcolor: 'rgba(21,101,192,0.06)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                          }}
-                        >
-                          <BusinessRoundedIcon sx={{ fontSize: 18, color: '#1565C0' }} />
-                          <Box>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
-                              Sucursales
-                            </Typography>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: '#0D47A1' }}>
-                              {business.activeTenantCount} / {business.tenantCount}
-                            </Typography>
-                          </Box>
+                  {/* Stats */}
+                  <Grid container spacing={1.5}>
+                    <Grid item xs={6}>
+                      <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(21,101,192,0.06)', display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <BusinessRoundedIcon sx={{ fontSize: 18, color: '#1565C0' }} />
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+                            Sucursales
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 700, color: '#0D47A1' }}>
+                            {business.activeTenantCount} / {business.tenantCount}
+                          </Typography>
                         </Box>
-                      </Grid>
-
-                      <Grid item xs={6}>
-                        <Box
-                          sx={{
-                            p: 1.5,
-                            borderRadius: 2,
-                            bgcolor: 'rgba(45,106,79,0.06)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                          }}
-                        >
-                          <TrendingUpRoundedIcon sx={{ fontSize: 18, color: '#2D6A4F' }} />
-                          <Box>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
-                              Ventas (30d)
-                            </Typography>
-                            <Typography variant="body2" sx={{ fontWeight: 700, color: '#1B4332' }}>
-                              {formatCurrency(business.salesLast30Days)}
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </Grid>
-
-                      <Grid item xs={12}>
-                        <Box
-                          sx={{
-                            p: 1.5,
-                            borderRadius: 2,
-                            bgcolor: (business.netLast30Days ?? 0) >= 0
-                              ? 'rgba(21,101,192,0.06)'
-                              : 'rgba(198,40,40,0.06)',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: 1,
-                          }}
-                        >
-                          <AccountBalanceWalletRoundedIcon
-                            sx={{
-                              fontSize: 18,
-                              color: (business.netLast30Days ?? 0) >= 0 ? '#1565C0' : '#C62828',
-                            }}
-                          />
-                          <Box>
-                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
-                              Neto (30d)
-                            </Typography>
-                            <Typography
-                              variant="body2"
-                              sx={{
-                                fontWeight: 700,
-                                color: (business.netLast30Days ?? 0) >= 0 ? '#0D47A1' : '#C62828',
-                              }}
-                            >
-                              {formatCurrency(business.netLast30Days)}
-                            </Typography>
-                          </Box>
-                        </Box>
-                      </Grid>
+                      </Box>
                     </Grid>
-                  </CardContent>
-                </CardActionArea>
+
+                    <Grid item xs={6}>
+                      <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(45,106,79,0.06)', display: 'flex', alignItems: 'center', gap: 1 }}>
+                        <TrendingUpRoundedIcon sx={{ fontSize: 18, color: '#2D6A4F' }} />
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+                            Ventas (30d)
+                          </Typography>
+                          <Typography variant="body2" sx={{ fontWeight: 700, color: '#1B4332' }}>
+                            {formatCurrency(business.salesLast30Days)}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Grid>
+
+                    <Grid item xs={12}>
+                      <Box
+                        sx={{
+                          p: 1.5,
+                          borderRadius: 2,
+                          bgcolor: (business.netLast30Days ?? 0) >= 0 ? 'rgba(21,101,192,0.06)' : 'rgba(198,40,40,0.06)',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1,
+                        }}
+                      >
+                        <AccountBalanceWalletRoundedIcon
+                          sx={{ fontSize: 18, color: (business.netLast30Days ?? 0) >= 0 ? '#1565C0' : '#C62828' }}
+                        />
+                        <Box>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', lineHeight: 1.2 }}>
+                            Neto (30d)
+                          </Typography>
+                          <Typography
+                            variant="body2"
+                            sx={{ fontWeight: 700, color: (business.netLast30Days ?? 0) >= 0 ? '#0D47A1' : '#C62828' }}
+                          >
+                            {formatCurrency(business.netLast30Days)}
+                          </Typography>
+                        </Box>
+                      </Box>
+                    </Grid>
+                  </Grid>
+                </CardContent>
+
+                {/* Barra de acciones (fuera del área clickeable) */}
+                <Divider />
+                <Box sx={{ px: 2, py: 1, display: 'flex', justifyContent: 'flex-end', gap: 0.5 }}>
+                  <Tooltip title="Editar negocio">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleOpenEdit(e, business)}
+                      sx={{ color: 'primary.main' }}
+                      aria-label={`Editar ${business.name}`}
+                    >
+                      <EditRoundedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                  <Tooltip title="Eliminar negocio">
+                    <IconButton
+                      size="small"
+                      onClick={(e) => handleOpenDelete(e, business)}
+                      sx={{ color: 'error.main' }}
+                      aria-label={`Eliminar ${business.name}`}
+                    >
+                      <DeleteRoundedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </Box>
               </Card>
             </Grid>
           ))}
       </Grid>
 
-      {/* Modal — Nuevo Negocio */}
-      <Dialog
-        open={modalOpen}
-        onClose={handleCloseModal}
-        fullWidth
-        maxWidth="sm"
-        PaperProps={{ sx: { borderRadius: 3 } }}
-      >
-        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>
-          Nuevo Negocio
-        </DialogTitle>
-
+      {/* ── Modal: Nuevo Negocio ─────────────────────────────────────────────── */}
+      <Dialog open={createOpen} onClose={handleCloseCreate} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>Nuevo Negocio</DialogTitle>
         <DialogContent sx={{ pt: 1 }}>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 3 }}>
             Completá los datos para crear el negocio y su primera sucursal.
           </Typography>
-
-          {saveError && (
-            <Alert severity="error" sx={{ mb: 2 }}>
-              {saveError}
-            </Alert>
-          )}
-
+          {saveError && <Alert severity="error" sx={{ mb: 2 }}>{saveError}</Alert>}
           <TextField
             label="Nombre del negocio"
             placeholder="Ej: Huevos Point"
             value={form.businessName}
-            onChange={handleChange('businessName')}
+            onChange={handleChangeCreate('businessName')}
             error={Boolean(formErrors.businessName)}
             helperText={formErrors.businessName}
             fullWidth
@@ -354,32 +422,115 @@ export default function BusinessesPage() {
             disabled={saving}
             sx={{ mb: 2.5 }}
           />
-
           <TextField
             label="Nombre de la primera sucursal"
             placeholder="Ej: Sucursal Centro"
             value={form.tenantName}
-            onChange={handleChange('tenantName')}
+            onChange={handleChangeCreate('tenantName')}
             error={Boolean(formErrors.tenantName)}
             helperText={formErrors.tenantName}
             fullWidth
             disabled={saving}
-            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmit(); }}
+            onKeyDown={(e) => { if (e.key === 'Enter') handleSubmitCreate(); }}
           />
         </DialogContent>
-
         <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
-          <Button onClick={handleCloseModal} disabled={saving} variant="outlined" color="inherit">
+          <Button onClick={handleCloseCreate} disabled={saving} variant="outlined" color="inherit">
             Cancelar
           </Button>
           <Button
-            onClick={handleSubmit}
+            onClick={handleSubmitCreate}
             disabled={saving}
             variant="contained"
             startIcon={saving ? <CircularProgress size={16} color="inherit" /> : <AddRoundedIcon />}
           >
             {saving ? 'Creando...' : 'Crear Negocio'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Modal: Editar Negocio ────────────────────────────────────────────── */}
+      <Dialog open={editOpen} onClose={handleCloseEdit} fullWidth maxWidth="sm" PaperProps={{ sx: { borderRadius: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>Editar Negocio</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {editError && <Alert severity="error" sx={{ mb: 2 }}>{editError}</Alert>}
+
+          <TextField
+            label="Nombre del negocio"
+            value={editBusinessName}
+            onChange={(e) => setEditBusinessName(e.target.value)}
+            fullWidth
+            autoFocus
+            disabled={editSaving || editLoading}
+            sx={{ mb: 3 }}
+          />
+
+          {editLoading ? (
+            <Box sx={{ display: 'flex', justifyContent: 'center', py: 2 }}>
+              <CircularProgress size={24} />
+            </Box>
+          ) : editTenants.length > 0 && (
+            <>
+              <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 700, display: 'block', mb: 1.5 }}>
+                Sucursales
+              </Typography>
+              <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                {editTenants.map((tenant, idx) => (
+                  <TextField
+                    key={tenant.id}
+                    label={`Sucursal ${idx + 1}`}
+                    value={tenant.name}
+                    onChange={(e) => handleChangeTenantName(idx, e.target.value)}
+                    fullWidth
+                    disabled={editSaving}
+                  />
+                ))}
+              </Box>
+            </>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={handleCloseEdit} disabled={editSaving} variant="outlined" color="inherit">
+            Cancelar
+          </Button>
+          <Button
+            onClick={handleSubmitEdit}
+            disabled={editSaving || editLoading}
+            variant="contained"
+            startIcon={editSaving ? <CircularProgress size={16} color="inherit" /> : <EditRoundedIcon />}
+          >
+            {editSaving ? 'Guardando...' : 'Guardar cambios'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* ── Modal: Confirmar Eliminación ─────────────────────────────────────── */}
+      <Dialog open={deleteOpen} onClose={handleCloseDelete} maxWidth="xs" fullWidth PaperProps={{ sx: { borderRadius: 3 } }}>
+        <DialogTitle sx={{ fontWeight: 800, pb: 1 }}>Eliminar Negocio</DialogTitle>
+        <DialogContent sx={{ pt: 1 }}>
+          {deleteError ? (
+            <Alert severity="error">{deleteError}</Alert>
+          ) : (
+            <Typography variant="body2" color="text.secondary">
+              ¿Seguro que querés eliminar <strong>{deleteBusiness?.name}</strong> y todas sus sucursales? Esta acción no se puede deshacer.
+            </Typography>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button onClick={handleCloseDelete} disabled={deleting} variant="outlined" color="inherit">
+            Cancelar
+          </Button>
+          {!deleteError && (
+            <Button
+              onClick={handleConfirmDelete}
+              disabled={deleting}
+              variant="contained"
+              color="error"
+              startIcon={deleting ? <CircularProgress size={16} color="inherit" /> : <DeleteRoundedIcon />}
+            >
+              {deleting ? 'Eliminando...' : 'Eliminar'}
+            </Button>
+          )}
         </DialogActions>
       </Dialog>
     </Box>
