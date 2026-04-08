@@ -1,8 +1,9 @@
 const { Router } = require('express');
 const jwt = require('jsonwebtoken');
+const bcrypt = require('bcryptjs');
 const sequelize = require('../config/database');
 const { authMiddleware } = require('../middlewares/auth');
-const { Tenant, SuperadminAuditLog } = require('../models');
+const { Tenant, User, SuperadminAuditLog } = require('../models');
 const env = require('../config/environment');
 const {
   fetchAllPages,
@@ -344,84 +345,43 @@ router.post('/:tenantId/users', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Rol inválido' });
     }
 
-    // Paso 1 — Generar JWT de corta duración firmado con el secret compartido
-    const accessPayload = {
-      id: req.user.id,
-      username: req.user.username,
-      fullName: req.user.fullName,
-      role: 'superadmin',
-      tenants: [],
-      _source: 'dashboard-maestro',
-    };
-    const autoLoginToken = jwt.sign(accessPayload, env.JWT_SECRET, { expiresIn: '5m' });
-
-    // Paso 2 — Validar token via auto-login para obtener JWT de sesión de HP
-    let hpSessionToken;
-    try {
-      const autoLoginRes = await fetch(`${env.APP_URL}/api/auth/auto-login`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ token: autoLoginToken }),
-      });
-      const autoLoginData = await autoLoginRes.json().catch(() => ({}));
-      if (!autoLoginRes.ok) {
-        console.error('[CREATE_USER] Auto-login falló:', autoLoginRes.status, autoLoginData);
-        return res.status(503).json({
-          success: false,
-          message: autoLoginData.message || 'Error al autenticarse en la app de negocios',
-        });
+    // Verificar duplicados
+    const existingUsername = await User.findOne({ where: { username: username.trim() } });
+    if (existingUsername) {
+      return res.status(400).json({ success: false, message: 'El nombre de usuario ya está en uso' });
+    }
+    if (email?.trim()) {
+      const existingEmail = await User.findOne({ where: { email: email.trim() } });
+      if (existingEmail) {
+        return res.status(400).json({ success: false, message: 'El correo electrónico ya está registrado' });
       }
-      hpSessionToken = autoLoginData.data?.token;
-      if (!hpSessionToken) {
-        return res.status(503).json({ success: false, message: 'No se recibió token de sesión de la app de negocios' });
-      }
-    } catch (fetchErr) {
-      console.error('[CREATE_USER] Error de conexión con HP (auto-login):', fetchErr.message);
-      return res.status(503).json({
-        success: false,
-        message: 'No se pudo conectar con la app de negocios. Verificá la configuración de APP_URL.',
-      });
     }
 
-    // Payload para la app de negocios
-    const userPayload = {
-      fullName: fullName.trim(),
-      username: username.trim(),
-      password,
-      role,
-      tenantIds: role === 'superadmin' ? [] : [tenantId],
-    };
-    if (email?.trim()) userPayload.email = email.trim();
+    // Hashear contraseña y crear usuario en la DB compartida
+    const hashedPassword = await bcrypt.hash(password, 10);
 
-    // Paso 3 — Crear el usuario usando el JWT de sesión obtenido
-    let hpResponse;
-    try {
-      hpResponse = await fetch(`${env.APP_URL}/api/users`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${hpSessionToken}`,
+    const newUser = await sequelize.transaction(async (t) => {
+      const user = await User.create(
+        {
+          fullName: fullName.trim(),
+          username: username.trim(),
+          password: hashedPassword,
+          role,
+          email: email?.trim() || null,
+          isActive: true,
         },
-        body: JSON.stringify(userPayload),
-      });
-    } catch (fetchErr) {
-      console.error('[CREATE_USER] Error de conexión con HP:', fetchErr.message);
-      return res.status(503).json({
-        success: false,
-        message: 'No se pudo conectar con la app de negocios. Verificá la configuración de APP_URL.',
-      });
-    }
+        { transaction: t }
+      );
 
-    // Parsear respuesta con fallback por si HP devuelve HTML en vez de JSON
-    const hpData = await hpResponse.json().catch(() => ({}));
+      if (role !== 'superadmin') {
+        await sequelize.query(
+          'INSERT INTO user_tenants (user_id, tenant_id) VALUES (:userId, :tenantId)',
+          { replacements: { userId: user.id, tenantId }, transaction: t, type: sequelize.QueryTypes.INSERT }
+        );
+      }
 
-    if (!hpResponse.ok) {
-      console.error('[CREATE_USER] HP respondió con error:', hpResponse.status, hpData);
-      return res.status(hpResponse.status).json({
-        success: false,
-        message: hpData.message || `Error al crear el usuario en la app de negocios (${hpResponse.status})`,
-      });
-    }
+      return user;
+    });
 
     auditAccess(req, 'CREATE_USER', tenantId, {
       newUsername: username.trim(),
@@ -431,7 +391,14 @@ router.post('/:tenantId/users', async (req, res, next) => {
 
     res.status(201).json({
       success: true,
-      data: hpData.data,
+      data: {
+        id: newUser.id,
+        username: newUser.username,
+        fullName: newUser.fullName,
+        email: newUser.email,
+        role: newUser.role,
+        isActive: newUser.isActive,
+      },
       message: 'Usuario creado correctamente',
     });
   } catch (error) {
