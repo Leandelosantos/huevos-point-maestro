@@ -312,4 +312,94 @@ router.post('/:tenantId/reactivate', async (req, res, next) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// POST /api/tenants/:tenantId/users
+// Crea un usuario en la app de negocios para esta sucursal.
+// Proxy autenticado: genera un JWT de superadmin y llama a POST /api/users de HP.
+// ──────────────────────────────────────────────────────────────────────────────
+router.post('/:tenantId/users', async (req, res, next) => {
+  try {
+    const tenantId = parseInt(req.params.tenantId, 10);
+    if (!tenantId || tenantId <= 0) {
+      return res.status(400).json({ success: false, message: 'ID de tenant inválido' });
+    }
+
+    const tenant = await Tenant.findByPk(tenantId, { attributes: ['id', 'name'] });
+    if (!tenant) {
+      return res.status(404).json({ success: false, message: 'Tenant no encontrado' });
+    }
+
+    const { fullName, username, password, role, email } = req.body;
+
+    if (!fullName?.trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre completo es requerido' });
+    }
+    if (!username?.trim()) {
+      return res.status(400).json({ success: false, message: 'El nombre de usuario es requerido' });
+    }
+    if (!password) {
+      return res.status(400).json({ success: false, message: 'La contraseña es requerida' });
+    }
+    if (!['employee', 'admin', 'superadmin'].includes(role)) {
+      return res.status(400).json({ success: false, message: 'Rol inválido' });
+    }
+
+    // Generar JWT de corta duración para autenticarse en la app de negocios
+    const allTenants = await Tenant.findAll({ attributes: ['id', 'name'], order: [['name', 'ASC']] });
+    const accessPayload = {
+      id: req.user.id,
+      username: req.user.username,
+      fullName: req.user.fullName,
+      role: 'superadmin',
+      tenants: allTenants.map((t) => ({ id: t.id, name: t.name })),
+      _source: 'dashboard-maestro',
+    };
+    const accessToken = jwt.sign(accessPayload, env.JWT_SECRET, { expiresIn: '5m' });
+
+    // Payload para la app de negocios
+    const userPayload = {
+      fullName: fullName.trim(),
+      username: username.trim(),
+      password,
+      role,
+      tenantIds: role === 'superadmin' ? [] : [tenantId],
+    };
+    if (email?.trim()) userPayload.email = email.trim();
+
+    // Llamar a POST /api/users en la app de negocios
+    const hpResponse = await fetch(`${env.APP_URL}/api/users`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${accessToken}`,
+        'x-tenant-id': String(tenantId),
+      },
+      body: JSON.stringify(userPayload),
+    });
+
+    const hpData = await hpResponse.json();
+
+    if (!hpResponse.ok) {
+      return res.status(hpResponse.status).json({
+        success: false,
+        message: hpData.message || 'Error al crear el usuario en la app de negocios',
+      });
+    }
+
+    auditAccess(req, 'CREATE_USER', tenantId, {
+      newUsername: username.trim(),
+      role,
+      tenantName: tenant.name,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: hpData.data,
+      message: 'Usuario creado correctamente',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

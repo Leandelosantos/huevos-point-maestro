@@ -21,8 +21,18 @@ import {
   Tooltip,
   IconButton,
   CircularProgress,
+  Dialog,
+  DialogTitle,
+  DialogContent,
+  DialogActions,
+  TextField,
+  Select,
+  MenuItem,
+  FormControl,
+  InputLabel,
 } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
+import PersonAddRoundedIcon from '@mui/icons-material/PersonAddRounded';
 import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import TrendingDownRoundedIcon from '@mui/icons-material/TrendingDownRounded';
 import AccountBalanceWalletRoundedIcon from '@mui/icons-material/AccountBalanceWalletRounded';
@@ -51,6 +61,36 @@ export default function TenantDetailPage() {
   const [successMsg, setSuccessMsg] = useState('');
 
   const pollingRef = useRef(null);
+
+  // Estado del modal "Nuevo usuario"
+  const [createUserOpen, setCreateUserOpen] = useState(false);
+  const [createUserForm, setCreateUserForm] = useState({
+    fullName: '', username: '', password: '', role: 'employee', email: '',
+  });
+  const [createUserLoading, setCreateUserLoading] = useState(false);
+  const [createUserError, setCreateUserError] = useState('');
+
+  const handleCreateUser = async () => {
+    if (!createUserForm.fullName.trim() || !createUserForm.username.trim() || !createUserForm.password) return;
+    setCreateUserLoading(true);
+    setCreateUserError('');
+    try {
+      await api.post(`/tenants/${tenantId}/users`, {
+        fullName: createUserForm.fullName,
+        username: createUserForm.username,
+        password: createUserForm.password,
+        role: createUserForm.role,
+        ...(createUserForm.email.trim() ? { email: createUserForm.email.trim() } : {}),
+      });
+      setCreateUserOpen(false);
+      setCreateUserForm({ fullName: '', username: '', password: '', role: 'employee', email: '' });
+      fetchDetail();
+    } catch (err) {
+      setCreateUserError(err.response?.data?.message || 'Error al crear el usuario');
+    } finally {
+      setCreateUserLoading(false);
+    }
+  };
 
   // Cargar detalle completo del tenant
   const fetchDetail = useCallback(async () => {
@@ -345,6 +385,17 @@ export default function TenantDetailPage() {
             {!loading && (
               <Chip label={detail?.users?.length || 0} size="small" color="primary" variant="outlined" />
             )}
+            <Box sx={{ ml: 'auto' }}>
+              <Button
+                size="small"
+                variant="outlined"
+                startIcon={<PersonAddRoundedIcon />}
+                onClick={() => setCreateUserOpen(true)}
+                disabled={loading}
+              >
+                Nuevo usuario
+              </Button>
+            </Box>
           </Box>
           <Divider />
           <TableContainer component={Paper} sx={{ boxShadow: 'none', overflowX: 'auto' }}>
@@ -407,6 +458,84 @@ export default function TenantDetailPage() {
           </TableContainer>
         </CardContent>
       </Card>
+
+      {/* Modal: Nuevo usuario */}
+      <Dialog
+        open={createUserOpen}
+        onClose={() => !createUserLoading && setCreateUserOpen(false)}
+        fullWidth
+        maxWidth="sm"
+      >
+        <DialogTitle sx={{ fontWeight: 700 }}>Nuevo usuario</DialogTitle>
+        <DialogContent sx={{ display: 'flex', flexDirection: 'column', gap: 2.5, pt: '12px !important' }}>
+          {createUserError && (
+            <Alert severity="error" onClose={() => setCreateUserError('')}>{createUserError}</Alert>
+          )}
+          <TextField
+            label="Nombre completo"
+            value={createUserForm.fullName}
+            onChange={(e) => setCreateUserForm((f) => ({ ...f, fullName: e.target.value }))}
+            required
+            fullWidth
+            disabled={createUserLoading}
+          />
+          <TextField
+            label="Nombre de usuario"
+            value={createUserForm.username}
+            onChange={(e) => setCreateUserForm((f) => ({ ...f, username: e.target.value }))}
+            required
+            fullWidth
+            disabled={createUserLoading}
+            helperText="Debe ser único en todo el sistema"
+          />
+          <TextField
+            label="Contraseña"
+            type="password"
+            value={createUserForm.password}
+            onChange={(e) => setCreateUserForm((f) => ({ ...f, password: e.target.value }))}
+            required
+            fullWidth
+            disabled={createUserLoading}
+          />
+          <FormControl fullWidth required>
+            <InputLabel>Rol</InputLabel>
+            <Select
+              value={createUserForm.role}
+              label="Rol"
+              onChange={(e) => setCreateUserForm((f) => ({ ...f, role: e.target.value }))}
+              disabled={createUserLoading}
+            >
+              <MenuItem value="employee">Empleado</MenuItem>
+              <MenuItem value="admin">Admin</MenuItem>
+              <MenuItem value="superadmin">Super Admin</MenuItem>
+            </Select>
+          </FormControl>
+          <TextField
+            label="Email (opcional)"
+            type="email"
+            value={createUserForm.email}
+            onChange={(e) => setCreateUserForm((f) => ({ ...f, email: e.target.value }))}
+            fullWidth
+            disabled={createUserLoading}
+          />
+        </DialogContent>
+        <DialogActions sx={{ px: 3, pb: 3, gap: 1 }}>
+          <Button
+            onClick={() => { setCreateUserOpen(false); setCreateUserError(''); }}
+            disabled={createUserLoading}
+          >
+            Cancelar
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleCreateUser}
+            disabled={createUserLoading || !createUserForm.fullName.trim() || !createUserForm.username.trim() || !createUserForm.password}
+            startIcon={createUserLoading ? <CircularProgress size={16} color="inherit" /> : <PersonAddRoundedIcon />}
+          >
+            Crear usuario
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Ventas recientes */}
       <Card>
