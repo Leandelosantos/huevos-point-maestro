@@ -367,22 +367,33 @@ router.post('/:tenantId/users', async (req, res, next) => {
     if (email?.trim()) userPayload.email = email.trim();
 
     // Llamar a POST /api/users en la app de negocios
-    const hpResponse = await fetch(`${env.APP_URL}/api/users`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${accessToken}`,
-        'x-tenant-id': String(tenantId),
-      },
-      body: JSON.stringify(userPayload),
-    });
+    let hpResponse;
+    try {
+      hpResponse = await fetch(`${env.APP_URL}/api/users`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${accessToken}`,
+          'x-tenant-id': String(tenantId),
+        },
+        body: JSON.stringify(userPayload),
+      });
+    } catch (fetchErr) {
+      console.error('[CREATE_USER] Error de conexión con HP:', fetchErr.message);
+      return res.status(503).json({
+        success: false,
+        message: 'No se pudo conectar con la app de negocios. Verificá la configuración de APP_URL.',
+      });
+    }
 
-    const hpData = await hpResponse.json();
+    // Parsear respuesta con fallback por si HP devuelve HTML en vez de JSON
+    const hpData = await hpResponse.json().catch(() => ({}));
 
     if (!hpResponse.ok) {
+      console.error('[CREATE_USER] HP respondió con error:', hpResponse.status, hpData);
       return res.status(hpResponse.status).json({
         success: false,
-        message: hpData.message || 'Error al crear el usuario en la app de negocios',
+        message: hpData.message || `Error al crear el usuario en la app de negocios (${hpResponse.status})`,
       });
     }
 
