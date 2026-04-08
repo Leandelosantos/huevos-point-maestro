@@ -31,6 +31,7 @@ import {
   FormControl,
   InputLabel,
   InputAdornment,
+  Switch,
 } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import PersonAddRoundedIcon from '@mui/icons-material/PersonAddRounded';
@@ -73,6 +74,7 @@ export default function TenantDetailPage() {
   const [createUserLoading, setCreateUserLoading] = useState(false);
   const [createUserError, setCreateUserError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [togglingUsers, setTogglingUsers] = useState({});
 
   const handleCreateUser = async () => {
     if (!createUserForm.fullName.trim() || !createUserForm.username.trim() || !createUserForm.password) return;
@@ -93,6 +95,26 @@ export default function TenantDetailPage() {
       setCreateUserError(err.response?.data?.message || 'Error al crear el usuario');
     } finally {
       setCreateUserLoading(false);
+    }
+  };
+
+  const handleToggleUserActive = async (userId, currentIsActive) => {
+    setTogglingUsers((prev) => ({ ...prev, [userId]: true }));
+    // Actualización optimista
+    setDetail((prev) => ({
+      ...prev,
+      users: prev.users.map((u) => u.id === userId ? { ...u, isActive: !currentIsActive } : u),
+    }));
+    try {
+      await api.patch(`/tenants/${tenantId}/users/${userId}/active`);
+    } catch {
+      // Revertir si falla
+      setDetail((prev) => ({
+        ...prev,
+        users: prev.users.map((u) => u.id === userId ? { ...u, isActive: currentIsActive } : u),
+      }));
+    } finally {
+      setTogglingUsers((prev) => ({ ...prev, [userId]: false }));
     }
   };
 
@@ -443,16 +465,15 @@ export default function TenantDetailPage() {
                         />
                       </TableCell>
                       <TableCell align="center">
-                        <Chip
-                          label={u.isActive ? 'Activo' : 'Inactivo'}
-                          size="small"
-                          sx={{
-                            fontWeight: 700,
-                            fontSize: '0.72rem',
-                            backgroundColor: u.isActive ? 'rgba(45,106,79,0.1)' : 'rgba(211,47,47,0.1)',
-                            color: u.isActive ? '#2D6A4F' : '#D32F2F',
-                          }}
-                        />
+                        <Tooltip title={u.isActive ? 'Desactivar usuario' : 'Activar usuario'}>
+                          <Switch
+                            checked={u.isActive}
+                            onChange={() => handleToggleUserActive(u.id, u.isActive)}
+                            disabled={!!togglingUsers[u.id]}
+                            size="small"
+                            color="success"
+                          />
+                        </Tooltip>
                       </TableCell>
                     </TableRow>
                   ))

@@ -406,4 +406,40 @@ router.post('/:tenantId/users', async (req, res, next) => {
   }
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// PATCH /api/tenants/:tenantId/users/:userId/active
+// Activa o desactiva un usuario (soft toggle de is_active).
+// ──────────────────────────────────────────────────────────────────────────────
+router.patch('/:tenantId/users/:userId/active', async (req, res, next) => {
+  try {
+    const tenantId = parseInt(req.params.tenantId, 10);
+    const userId = parseInt(req.params.userId, 10);
+
+    if (!tenantId || tenantId <= 0 || !userId || userId <= 0) {
+      return res.status(400).json({ success: false, message: 'ID inválido' });
+    }
+
+    const user = await User.findByPk(userId);
+    if (!user) {
+      return res.status(404).json({ success: false, message: 'Usuario no encontrado' });
+    }
+
+    const newIsActive = !user.isActive;
+    await user.update({ isActive: newIsActive });
+
+    auditAccess(req, newIsActive ? 'ACTIVATE_USER' : 'DEACTIVATE_USER', tenantId, {
+      targetUserId: userId,
+      targetUsername: user.username,
+    });
+
+    res.json({
+      success: true,
+      data: { id: user.id, isActive: newIsActive },
+      message: newIsActive ? 'Usuario activado correctamente' : 'Usuario desactivado correctamente',
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;
