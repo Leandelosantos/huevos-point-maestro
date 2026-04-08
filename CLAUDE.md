@@ -5,7 +5,7 @@ Siempre responder en español latinoamericano (Argentina).
 
 ## ¿Qué es este proyecto?
 Panel de administración maestro (superadmin) de **Huevos Point SaaS**.
-App independiente que se conecta a la misma base de datos que la app de negocios.
+App independiente que gestiona negocios/sucursales directamente en la DB y consume métricas vía API pública.
 
 ## Stack
 - **Backend**: Node.js + Express.js + Sequelize v6 + PostgreSQL (Neon serverless)
@@ -92,14 +92,39 @@ GET  /api/health
 | `code-reviewer` | Revisión de código, anti-patrones, convenciones |
 | `supabase-postgres-best-practices` | Queries SQL, índices, Neon optimization |
 
+## API pública de Huevos Point
+
+**REGLA CRÍTICA:** Todas las lecturas de ventas, egresos, compras, productos y métricas
+**DEBEN** consumirse a través del servicio `backend/src/services/huevosPointApi.js`,
+que llama a la API pública REST. **NUNCA** usar los modelos Sequelize `Sale` o `Expense`
+directamente para lecturas.
+
+Documentación completa: [`docs/public-api.md`](docs/public-api.md)
+
+**Qué va por API pública** (lectura):
+- Ventas (`/sales`), egresos (`/expenses`), compras (`/purchases`)
+- Productos (`/products`), métricas agregadas (`/metrics`)
+- Sucursales (`/tenants`) — solo lectura de stats
+
+**Qué sigue en DB directa** (escritura y metadata):
+- `businesses` — CRUD completo (tabla propia del dashboard)
+- `tenants` — suspend, reactivate, update (gestión de estado)
+- `users` / `user_tenants` — queries de usuarios vinculados a sucursales
+- `superadmin_audit_log` — registro de acciones
+
+Variables de entorno necesarias:
+- `HP_API_BASE_URL` — `https://huevos-point-gcbg.vercel.app/api/public/v1`
+- `HP_API_KEY` — API key con scope `read:all` y `business_id` del negocio (ver `docs/public-api.md` sección 5)
+
 ## Reglas importantes
 1. Solo usuarios con `role = 'superadmin'` pueden autenticarse en este panel
 2. Toda acción cross-tenant se registra en `superadmin_audit_log`
 3. El `JWT_SECRET` DEBE ser el mismo que la app de negocios
 4. Usar `sessionStorage` (no `localStorage`) — igual que la app de negocios
 5. `tenantId` siempre con `parseInt()` y validado > 0
-6. Métricas del día usan campos `sale_date` y `expense_date` (DATEONLY, no TIMESTAMPTZ)
+6. Métricas del día: filtrar por `saleDate === today` / `expenseDate === today` en los arrays de la API
 7. Para auto-login: `window.open(url, '_blank', 'noopener,noreferrer')`
+8. Nuevas sucursales creadas desde la app de negocios pueden llegar con `business_id = NULL` — asignarlas al negocio correspondiente via Supabase MCP
 
 ## Cómo correr en desarrollo
 ```bash

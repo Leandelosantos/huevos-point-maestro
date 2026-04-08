@@ -22,4 +22,7 @@ module.exports = {
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5174',
   // URL de la app de negocios para generar el redirect de auto-login
   APP_URL: process.env.APP_URL || 'https://huevos-point-gcbg.vercel.app',
+  // API pública de Huevos Point (ver docs/public-api.md)
+  HP_API_BASE_URL: process.env.HP_API_BASE_URL || 'https://huevos-point-gcbg.vercel.app/api/public/v1',
+  HP_API_KEY: process.env.HP_API_KEY || '',
 };

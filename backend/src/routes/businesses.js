@@ -1,8 +1,12 @@
 const { Router } = require('express');
-const { Op } = require('sequelize');
 const sequelize = require('../config/database');
 const { authMiddleware } = require('../middlewares/auth');
-const { Business, Tenant, Sale, Expense, SuperadminAuditLog } = require('../models');
+const { Business, Tenant, SuperadminAuditLog } = require('../models');
+const {
+  getStats,
+  aggregateSalesByTenant,
+  aggregateExpensesByTenant,
+} = require('../services/huevosPointApi');
 
 const router = Router();
 
@@ -21,33 +25,29 @@ async function auditAccess(req, action, details = {}) {
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/businesses
 // Lista todos los negocios con stats agregadas de sus sucursales.
+// Las métricas de ventas/egresos se obtienen desde la API pública de Huevos Point.
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+    const from = thirtyDaysAgo.toISOString().split('T')[0];
+    const to = new Date().toISOString().split('T')[0];
 
     const businesses = await Business.findAll({ order: [['name', 'ASC']] });
+
+    // Una sola llamada a la API trae todas las ventas/egresos del período
+    const { sales, expenses } = await getStats(from, to);
+    const salesByTenant = aggregateSalesByTenant(sales);
+    const expensesByTenant = aggregateExpensesByTenant(expenses);
 
     const results = await Promise.all(
       businesses.map(async (business) => {
         const tenants = await Tenant.findAll({ where: { businessId: business.id } });
         const tenantIds = tenants.map((t) => t.id);
 
-        const [salesTotal, expensesTotal] = tenantIds.length
-          ? await Promise.all([
-              Sale.sum('totalAmount', {
-                where: { tenantId: { [Op.in]: tenantIds }, saleDate: { [Op.gte]: dateThreshold } },
-              }),
-              Expense.sum('amount', {
-                where: { tenantId: { [Op.in]: tenantIds }, expenseDate: { [Op.gte]: dateThreshold } },
-              }),
-            ])
-          : [0, 0];
-
-        const sales30d = parseFloat(salesTotal) || 0;
-        const expenses30d = parseFloat(expensesTotal) || 0;
+        const sales30d = tenantIds.reduce((acc, id) => acc + (salesByTenant[id] || 0), 0);
+        const expenses30d = tenantIds.reduce((acc, id) => acc + (expensesByTenant[id] || 0), 0);
 
         return {
           id: business.id,
@@ -90,32 +90,29 @@ router.get('/:businessId', async (req, res, next) => {
 
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+    const from = thirtyDaysAgo.toISOString().split('T')[0];
+    const to = new Date().toISOString().split('T')[0];
 
     const tenants = await Tenant.findAll({
       where: { businessId },
       order: [['name', 'ASC']],
     });
 
+    // Traer ventas/egresos desde la API pública (una sola llamada por período)
+    const { sales, expenses } = await getStats(from, to);
+    const salesByTenant = aggregateSalesByTenant(sales);
+    const expensesByTenant = aggregateExpensesByTenant(expenses);
+
     const tenantsWithStats = await Promise.all(
       tenants.map(async (tenant) => {
-        const [userCount, salesLast30Days, expensesLast30Days] = await Promise.all([
-          sequelize.query(
-            'SELECT COUNT(*) as count FROM user_tenants WHERE tenant_id = :tenantId',
-            { replacements: { tenantId: tenant.id }, type: sequelize.QueryTypes.SELECT }
-          ).then((rows) => parseInt(rows[0]?.count || 0, 10)),
+        const [userCountRows] = await sequelize.query(
+          'SELECT COUNT(*) as count FROM user_tenants WHERE tenant_id = :tenantId',
+          { replacements: { tenantId: tenant.id }, type: sequelize.QueryTypes.SELECT }
+        );
+        const userCount = parseInt(userCountRows?.count || 0, 10);
 
-          Sale.sum('totalAmount', {
-            where: { tenantId: tenant.id, saleDate: { [Op.gte]: dateThreshold } },
-          }),
-
-          Expense.sum('amount', {
-            where: { tenantId: tenant.id, expenseDate: { [Op.gte]: dateThreshold } },
-          }),
-        ]);
-
-        const sales30d = parseFloat(salesLast30Days) || 0;
-        const expenses30d = parseFloat(expensesLast30Days) || 0;
+        const sales30d = salesByTenant[tenant.id] || 0;
+        const expenses30d = expensesByTenant[tenant.id] || 0;
 
         return {
           id: tenant.id,
@@ -132,7 +129,6 @@ router.get('/:businessId', async (req, res, next) => {
       })
     );
 
-    // Stats globales del negocio
     const totalStats = {
       tenantCount: tenants.length,
       activeTenantCount: tenants.filter((t) => t.isActive).length,
@@ -229,10 +225,11 @@ router.delete('/:businessId', async (req, res, next) => {
     const tenantIds = tenants.map((t) => t.id);
 
     if (tenantIds.length > 0) {
-      const [salesCount, expensesCount] = await Promise.all([
-        Sale.count({ where: { tenantId: { [Op.in]: tenantIds } } }),
-        Expense.count({ where: { tenantId: { [Op.in]: tenantIds } } }),
-      ]);
+      // Verificar existencia de datos via API pública (evita conexión directa a sales/expenses)
+      const { sales, expenses } = await getStats('2000-01-01', new Date().toISOString().split('T')[0]);
+      const tenantIdSet = new Set(tenantIds);
+      const salesCount = sales.filter((s) => tenantIdSet.has(s.tenantId)).length;
+      const expensesCount = expenses.filter((e) => tenantIdSet.has(e.tenantId)).length;
 
       if (salesCount > 0 || expensesCount > 0) {
         return res.status(409).json({
@@ -244,7 +241,6 @@ router.delete('/:businessId', async (req, res, next) => {
 
     await sequelize.transaction(async (t) => {
       if (tenantIds.length > 0) {
-        // Desvincula registros que referencian a estos tenants (FK nullables)
         await sequelize.query(
           'DELETE FROM user_tenants WHERE tenant_id IN (:tenantIds)',
           { replacements: { tenantIds }, transaction: t, type: sequelize.QueryTypes.DELETE }
@@ -293,14 +289,12 @@ router.post('/', async (req, res, next) => {
     const trimmedBusinessName = String(businessName).trim();
     const trimmedTenantName   = String(tenantName).trim();
 
-    // Slug automático desde el nombre del negocio
     const slug = trimmedBusinessName
       .toLowerCase()
-      .normalize('NFD').replace(/[\u0300-\u036f]/g, '') // quitar tildes
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^a-z0-9]+/g, '-')
       .replace(/^-|-$/g, '');
 
-    // Crear negocio y sucursal en una transacción
     const result = await sequelize.transaction(async (t) => {
       const business = await Business.create(
         { name: trimmedBusinessName, slug },

@@ -1,14 +1,19 @@
 const { Router } = require('express');
 const jwt = require('jsonwebtoken');
-const { Op, fn, col, literal } = require('sequelize');
 const sequelize = require('../config/database');
 const { authMiddleware } = require('../middlewares/auth');
-const { Tenant, User, Sale, Expense, SuperadminAuditLog } = require('../models');
+const { Tenant, SuperadminAuditLog } = require('../models');
 const env = require('../config/environment');
+const {
+  fetchAllPages,
+  getStats,
+  aggregateSalesByTenant,
+  aggregateExpensesByTenant,
+  DEFAULT_KEY,
+} = require('../services/huevosPointApi');
 
 const router = Router();
 
-// Todas las rutas requieren autenticación superadmin
 router.use(authMiddleware);
 
 /**
@@ -26,36 +31,33 @@ async function auditAccess(req, action, targetTenantId, details = {}) {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/tenants
-// Lista todos los tenants con stats de los últimos 30 días y conteos.
+// Lista todos los tenants con stats de los últimos 30 días.
+// Métricas de ventas/egresos desde la API pública de Huevos Point.
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/', async (req, res, next) => {
   try {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+    const from = thirtyDaysAgo.toISOString().split('T')[0];
+    const to = new Date().toISOString().split('T')[0];
 
     const tenants = await Tenant.findAll({ order: [['name', 'ASC']] });
 
+    // Traer ventas/egresos desde la API pública (una sola llamada)
+    const { sales, expenses } = await getStats(from, to);
+    const salesByTenant = aggregateSalesByTenant(sales);
+    const expensesByTenant = aggregateExpensesByTenant(expenses);
+
     const results = await Promise.all(
       tenants.map(async (tenant) => {
-        const [userCount, salesLast30Days, expensesLast30Days] = await Promise.all([
-          // Contar usuarios via user_tenants (M:N)
-          sequelize.query(
-            'SELECT COUNT(*) as count FROM user_tenants WHERE tenant_id = :tenantId',
-            { replacements: { tenantId: tenant.id }, type: sequelize.QueryTypes.SELECT }
-          ).then((rows) => parseInt(rows[0]?.count || 0, 10)),
+        const [userCountRow] = await sequelize.query(
+          'SELECT COUNT(*) as count FROM user_tenants WHERE tenant_id = :tenantId',
+          { replacements: { tenantId: tenant.id }, type: sequelize.QueryTypes.SELECT }
+        );
+        const userCount = parseInt(userCountRow?.count || 0, 10);
 
-          Sale.sum('totalAmount', {
-            where: { tenantId: tenant.id, saleDate: { [Op.gte]: dateThreshold } },
-          }),
-
-          Expense.sum('amount', {
-            where: { tenantId: tenant.id, expenseDate: { [Op.gte]: dateThreshold } },
-          }),
-        ]);
-
-        const sales30d = parseFloat(salesLast30Days) || 0;
-        const expenses30d = parseFloat(expensesLast30Days) || 0;
+        const sales30d = salesByTenant[tenant.id] || 0;
+        const expenses30d = expensesByTenant[tenant.id] || 0;
 
         return {
           id: tenant.id,
@@ -82,7 +84,7 @@ router.get('/', async (req, res, next) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/tenants/:tenantId
-// Detalle completo de un tenant (métricas 30d + usuarios + ventas recientes).
+// Detalle completo de un tenant (métricas 30d + hoy + usuarios + ventas recientes).
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/:tenantId', async (req, res, next) => {
   try {
@@ -98,51 +100,45 @@ router.get('/:tenantId', async (req, res, next) => {
 
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    const dateThreshold = thirtyDaysAgo.toISOString().split('T')[0];
+    const from = thirtyDaysAgo.toISOString().split('T')[0];
     const today = new Date().toISOString().split('T')[0];
 
-    const [users, totalSales30d, totalExpenses30d, totalSalesToday, totalExpensesToday, recentSales] =
-      await Promise.all([
-        // Usuarios via M:N (user_tenants)
-        sequelize.query(
-          `SELECT u.id, u.username, u.full_name as "fullName", u.email, u.role, u.is_active as "isActive", u.created_at as "createdAt"
-           FROM users u
-           INNER JOIN user_tenants ut ON ut.user_id = u.id
-           WHERE ut.tenant_id = :tenantId
-           ORDER BY u.full_name ASC`,
-          { replacements: { tenantId }, type: sequelize.QueryTypes.SELECT }
-        ),
+    // Usuarios desde DB (no está en la API pública)
+    const usersPromise = sequelize.query(
+      `SELECT u.id, u.username, u.full_name as "fullName", u.email, u.role,
+              u.is_active as "isActive", u.created_at as "createdAt"
+       FROM users u
+       INNER JOIN user_tenants ut ON ut.user_id = u.id
+       WHERE ut.tenant_id = :tenantId
+       ORDER BY u.full_name ASC`,
+      { replacements: { tenantId }, type: sequelize.QueryTypes.SELECT }
+    );
 
-        Sale.sum('totalAmount', {
-          where: { tenantId, saleDate: { [Op.gte]: dateThreshold } },
-        }),
+    // Ventas y egresos desde la API pública (una sola llamada cubre 30d + hoy)
+    const salesPromise = fetchAllPages('/sales', { from, to: today }, DEFAULT_KEY).catch(() => []);
+    const expensesPromise = fetchAllPages('/expenses', { from, to: today }, DEFAULT_KEY).catch(() => []);
 
-        Expense.sum('amount', {
-          where: { tenantId, expenseDate: { [Op.gte]: dateThreshold } },
-        }),
+    const [users, allSales, allExpenses] = await Promise.all([
+      usersPromise,
+      salesPromise,
+      expensesPromise,
+    ]);
 
-        // Ventas de hoy — usa índice sales_tenant_date_idx
-        Sale.sum('totalAmount', {
-          where: { tenantId, saleDate: today },
-        }),
+    // Filtrar solo los registros de este tenant
+    const tenantSales30d = allSales.filter((s) => s.tenantId === tenantId);
+    const tenantExpenses30d = allExpenses.filter((e) => e.tenantId === tenantId);
+    const tenantSalesToday = tenantSales30d.filter((s) => s.saleDate === today);
+    const tenantExpensesToday = tenantExpenses30d.filter((e) => e.expenseDate === today);
 
-        // Egresos de hoy — usa índice expenses_tenant_date_idx
-        Expense.sum('amount', {
-          where: { tenantId, expenseDate: today },
-        }),
+    const totalSales30d = tenantSales30d.reduce((acc, s) => acc + parseFloat(s.totalAmount || 0), 0);
+    const totalExpenses30d = tenantExpenses30d.reduce((acc, e) => acc + parseFloat(e.amount || 0), 0);
+    const totalSalesToday = tenantSalesToday.reduce((acc, s) => acc + parseFloat(s.totalAmount || 0), 0);
+    const totalExpensesToday = tenantExpensesToday.reduce((acc, e) => acc + parseFloat(e.amount || 0), 0);
 
-        Sale.findAll({
-          where: { tenantId, saleDate: { [Op.gte]: dateThreshold } },
-          attributes: ['id', 'totalAmount', 'paymentMethod', 'saleDate', 'createdAt'],
-          order: [['createdAt', 'DESC']],
-          limit: 20,
-        }),
-      ]);
-
-    const sales30d = parseFloat(totalSales30d) || 0;
-    const expenses30d = parseFloat(totalExpenses30d) || 0;
-    const salesToday = parseFloat(totalSalesToday) || 0;
-    const expensesToday = parseFloat(totalExpensesToday) || 0;
+    // Últimas 20 ventas ordenadas por fecha de creación desc
+    const recentSales = [...tenantSales30d]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 20);
 
     auditAccess(req, 'VIEW_TENANT_DETAIL', tenantId);
 
@@ -152,12 +148,12 @@ router.get('/:tenantId', async (req, res, next) => {
         tenant,
         users,
         recentSales,
-        totalSales30d: sales30d,
-        totalExpenses30d: expenses30d,
-        netBalance30d: sales30d - expenses30d,
-        totalSalesToday: salesToday,
-        totalExpensesToday: expensesToday,
-        netBalanceToday: salesToday - expensesToday,
+        totalSales30d,
+        totalExpenses30d,
+        netBalance30d: totalSales30d - totalExpenses30d,
+        totalSalesToday,
+        totalExpensesToday,
+        netBalanceToday: totalSalesToday - totalExpensesToday,
       },
     });
   } catch (error) {
@@ -178,14 +174,16 @@ router.get('/:tenantId/today', async (req, res, next) => {
 
     const today = new Date().toISOString().split('T')[0];
 
-    const [salesToday, expensesToday, salesCount] = await Promise.all([
-      Sale.sum('totalAmount', { where: { tenantId, saleDate: today } }),
-      Expense.sum('amount', { where: { tenantId, expenseDate: today } }),
-      Sale.count({ where: { tenantId, saleDate: today } }),
+    const [todaySales, todayExpenses] = await Promise.all([
+      fetchAllPages('/sales', { from: today, to: today }, DEFAULT_KEY).catch(() => []),
+      fetchAllPages('/expenses', { from: today, to: today }, DEFAULT_KEY).catch(() => []),
     ]);
 
-    const totalVentas = parseFloat(salesToday) || 0;
-    const totalEgresos = parseFloat(expensesToday) || 0;
+    const tenantSales = todaySales.filter((s) => s.tenantId === tenantId);
+    const tenantExpenses = todayExpenses.filter((e) => e.tenantId === tenantId);
+
+    const totalVentas = tenantSales.reduce((acc, s) => acc + parseFloat(s.totalAmount || 0), 0);
+    const totalEgresos = tenantExpenses.reduce((acc, e) => acc + parseFloat(e.amount || 0), 0);
 
     res.json({
       success: true,
@@ -195,7 +193,7 @@ router.get('/:tenantId/today', async (req, res, next) => {
         totalVentasHoy: totalVentas,
         totalEgresosHoy: totalEgresos,
         netoCajaHoy: totalVentas - totalEgresos,
-        cantidadVentas: salesCount || 0,
+        cantidadVentas: tenantSales.length,
       },
     });
   } catch (error) {
@@ -205,8 +203,7 @@ router.get('/:tenantId/today', async (req, res, next) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // GET /api/tenants/:tenantId/access-token
-// Genera un JWT de auto-login para ingresar a la app de negocios como superadmin
-// en el contexto del tenant indicado.
+// Genera un JWT de auto-login para ingresar a la app de negocios.
 // ──────────────────────────────────────────────────────────────────────────────
 router.get('/:tenantId/access-token', async (req, res, next) => {
   try {
@@ -224,27 +221,21 @@ router.get('/:tenantId/access-token', async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'No se puede ingresar a un tenant suspendido' });
     }
 
-    // Cargar todos los tenants para el payload (igual que la app de negocios espera)
     const allTenants = await Tenant.findAll({
       attributes: ['id', 'name'],
       order: [['name', 'ASC']],
     });
 
-    // JWT con el formato EXACTO que espera la app de negocios
-    // El superadmin del Dashboard Maestro ingresa como superadmin en la app
     const accessPayload = {
       id: req.user.id,
       username: req.user.username,
       fullName: req.user.fullName,
       role: 'superadmin',
       tenants: allTenants.map((t) => ({ id: t.id, name: t.name })),
-      // Campo extra para identificar que viene del Dashboard Maestro
       _source: 'dashboard-maestro',
     };
 
-    // Token de corta duración para el auto-login (1 hora máximo)
     const accessToken = jwt.sign(accessPayload, env.JWT_SECRET, { expiresIn: '1h' });
-
     const redirectUrl = `${env.APP_URL}/auto-login?token=${accessToken}&tenant=${tenantId}`;
 
     auditAccess(req, 'ENTER_TENANT', tenantId, { targetTenantName: tenant.name });
@@ -265,7 +256,6 @@ router.get('/:tenantId/access-token', async (req, res, next) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // POST /api/tenants/:tenantId/suspend
-// Suspende un tenant.
 // ──────────────────────────────────────────────────────────────────────────────
 router.post('/:tenantId/suspend', async (req, res, next) => {
   try {
@@ -295,7 +285,6 @@ router.post('/:tenantId/suspend', async (req, res, next) => {
 
 // ──────────────────────────────────────────────────────────────────────────────
 // POST /api/tenants/:tenantId/reactivate
-// Reactiva un tenant suspendido.
 // ──────────────────────────────────────────────────────────────────────────────
 router.post('/:tenantId/reactivate', async (req, res, next) => {
   try {
