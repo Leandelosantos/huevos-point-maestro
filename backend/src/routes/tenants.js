@@ -344,17 +344,44 @@ router.post('/:tenantId/users', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Rol inválido' });
     }
 
-    // Generar JWT de corta duración para autenticarse en la app de negocios
-    const allTenants = await Tenant.findAll({ attributes: ['id', 'name'], order: [['name', 'ASC']] });
+    // Paso 1 — Generar JWT de corta duración firmado con el secret compartido
     const accessPayload = {
       id: req.user.id,
       username: req.user.username,
       fullName: req.user.fullName,
       role: 'superadmin',
-      tenants: allTenants.map((t) => ({ id: t.id, name: t.name })),
+      tenants: [],
       _source: 'dashboard-maestro',
     };
-    const accessToken = jwt.sign(accessPayload, env.JWT_SECRET, { expiresIn: '5m' });
+    const autoLoginToken = jwt.sign(accessPayload, env.JWT_SECRET, { expiresIn: '5m' });
+
+    // Paso 2 — Validar token via auto-login para obtener JWT de sesión de HP
+    let hpSessionToken;
+    try {
+      const autoLoginRes = await fetch(`${env.APP_URL}/api/auth/auto-login`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token: autoLoginToken }),
+      });
+      const autoLoginData = await autoLoginRes.json().catch(() => ({}));
+      if (!autoLoginRes.ok) {
+        console.error('[CREATE_USER] Auto-login falló:', autoLoginRes.status, autoLoginData);
+        return res.status(503).json({
+          success: false,
+          message: autoLoginData.message || 'Error al autenticarse en la app de negocios',
+        });
+      }
+      hpSessionToken = autoLoginData.data?.token;
+      if (!hpSessionToken) {
+        return res.status(503).json({ success: false, message: 'No se recibió token de sesión de la app de negocios' });
+      }
+    } catch (fetchErr) {
+      console.error('[CREATE_USER] Error de conexión con HP (auto-login):', fetchErr.message);
+      return res.status(503).json({
+        success: false,
+        message: 'No se pudo conectar con la app de negocios. Verificá la configuración de APP_URL.',
+      });
+    }
 
     // Payload para la app de negocios
     const userPayload = {
@@ -366,15 +393,14 @@ router.post('/:tenantId/users', async (req, res, next) => {
     };
     if (email?.trim()) userPayload.email = email.trim();
 
-    // Llamar a POST /api/users en la app de negocios
+    // Paso 3 — Crear el usuario usando el JWT de sesión obtenido
     let hpResponse;
     try {
       hpResponse = await fetch(`${env.APP_URL}/api/users`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${accessToken}`,
-          'x-tenant-id': String(tenantId),
+          Authorization: `Bearer ${hpSessionToken}`,
         },
         body: JSON.stringify(userPayload),
       });

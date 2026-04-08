@@ -30,9 +30,12 @@ import {
   MenuItem,
   FormControl,
   InputLabel,
+  InputAdornment,
 } from '@mui/material';
 import ArrowBackRoundedIcon from '@mui/icons-material/ArrowBackRounded';
 import PersonAddRoundedIcon from '@mui/icons-material/PersonAddRounded';
+import VisibilityRoundedIcon from '@mui/icons-material/VisibilityRounded';
+import VisibilityOffRoundedIcon from '@mui/icons-material/VisibilityOffRounded';
 import TrendingUpRoundedIcon from '@mui/icons-material/TrendingUpRounded';
 import TrendingDownRoundedIcon from '@mui/icons-material/TrendingDownRounded';
 import AccountBalanceWalletRoundedIcon from '@mui/icons-material/AccountBalanceWalletRounded';
@@ -69,6 +72,7 @@ export default function TenantDetailPage() {
   });
   const [createUserLoading, setCreateUserLoading] = useState(false);
   const [createUserError, setCreateUserError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   const handleCreateUser = async () => {
     if (!createUserForm.fullName.trim() || !createUserForm.username.trim() || !createUserForm.password) return;
@@ -490,12 +494,27 @@ export default function TenantDetailPage() {
           />
           <TextField
             label="Contraseña"
-            type="password"
+            type={showPassword ? 'text' : 'password'}
             value={createUserForm.password}
             onChange={(e) => setCreateUserForm((f) => ({ ...f, password: e.target.value }))}
             required
             fullWidth
             disabled={createUserLoading}
+            slotProps={{
+              input: {
+                endAdornment: (
+                  <InputAdornment position="end">
+                    <IconButton
+                      onClick={() => setShowPassword((v) => !v)}
+                      edge="end"
+                      tabIndex={-1}
+                    >
+                      {showPassword ? <VisibilityOffRoundedIcon /> : <VisibilityRoundedIcon />}
+                    </IconButton>
+                  </InputAdornment>
+                ),
+              },
+            }}
           />
           <FormControl fullWidth required>
             <InputLabel>Rol</InputLabel>
